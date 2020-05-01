@@ -1,7 +1,7 @@
 const std = @import("std");
+const lemon = @import("lemon");
 const parser = @import("parser.zig");
 const flags = @import("flag.zig");
-const lemon = @import("lemon");
 
 pub fn main() !void {
     var allocator = std.heap.page_allocator;
@@ -10,10 +10,11 @@ pub fn main() !void {
         .arg = "init",
         .description = "Initializes a new Git repository",
         .help = "Init creates a new .git repository within the worktree.",
-        .handle = fn (args: [][]const u8) void {
-            
-        }
-    }
+        .handle = fn (args: [][]const u8) void{
+            //var path = if (args.len > 0) { return args[0] } or
+            //var repo = lemon.Repository.init();
+        },
+    };
 
     if (parser.Parse(allocator)) |result| {
         std.debug.warn("Empty: {}\n", .{result.isEmpty()});
