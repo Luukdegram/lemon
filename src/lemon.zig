@@ -13,7 +13,7 @@ pub const Repository = struct {
 
     /// init initiates a Repository object within the provided path.
     /// `path` is the relative path to the current working directory.
-    pub fn init(allocator: *std.mem.Allocator, path: []u8) !Self {
+    pub fn init(allocator: *std.mem.Allocator, path: []const u8) !Self {
         var self: Self = undefined;
         self.allocator = allocator;
 
