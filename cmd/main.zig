@@ -21,19 +21,23 @@ pub fn main() !void {
         _ = try f.register(init);
         f.run();
     } else |err| {
-        std.debug.warn("Error occured: {}\n", .{err});
+        std.debug.warn("Error occured parsing arguments: {}\n", .{err});
     }
 }
 
 fn handleInit(args: [][]const u8, response: flags.Response) void {
-    var path = if (args.len > 0) if (std.mem.eql(u8, args[0], ".")) "" else args[0] else "";
+    var path = if (args.len > 1) if (std.mem.eql(u8, args[1], ".")) "" else args[1] else "";
 
     if (lemon.Repository.init(&allocator.allocator, path)) |*repo| {
         defer repo.deinit();
         if (repo.create()) |_| {
             response.write("Initialized empty Git Repository in {}/.git\n", repo.working_path);
         } else |err| {
-            response.write("Could not initialize Git repository.\n Error: {}\n", .{err});
+            const msg = switch (err) {
+                error.PathAlreadyExists => "Path already exists",
+                else => err,
+            };
+            response.write("Could not initialize Git repository: {}\n", msg);
         }
     } else |err| {
         response.write("Unexpected error occured: {}", err);

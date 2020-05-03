@@ -18,7 +18,7 @@ pub const Flags = struct {
     const Self = @This();
     resp: Response = Response{},
 
-    flags: std.ArrayList(Flag),
+    flags: std.StringHashMap(Flag),
     args: [][]const u8,
 
     /// run will check for each `Flag` if it matches the argument and then triggers its handler.
@@ -28,15 +28,14 @@ pub const Flags = struct {
         }
 
         // for each flag, check if it has a matching argument
-        for (self.flags.items) |flag| {
-            if (std.mem.eql(u8, flag.arg, self.args[0])) {
-                flag.handle(self.args[1..], self.resp);
-            }
+        if (self.flags.contains(self.args[0])) {
+            const flag = self.flags.getValue(self.args[0]);
+            flag.?.handle(self.args, self.resp);
         }
     }
 
     pub fn register(self: *Self, flag: Flag) !void {
-        return self.flags.append(flag);
+        _ = try self.flags.put(flag.arg, flag);
     }
 };
 
@@ -54,7 +53,7 @@ pub const Response = struct {
 /// init creates a new `Flags` and initializes the mandatory fields
 pub fn init(args: [][]const u8, allocator: *std.mem.Allocator) Flags {
     return .{
-        .flags = std.ArrayList(Flag).init(allocator),
+        .flags = std.StringHashMap(Flag).init(allocator),
         .args = args,
     };
 }
