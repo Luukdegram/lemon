@@ -53,11 +53,6 @@ pub const Repository = struct {
 
         // loop over the current directory and set current to parent if nothing found
         scan_dir: while (true) {
-            // if current directory is root
-            if (std.mem.eql(u8, cwd, fs.path.sep_str)) {
-                return false;
-            }
-
             // iterate over childs to detect .git directory
             var dir_it = dir.iterate();
             while (try dir_it.next()) |entry| {
@@ -67,6 +62,10 @@ pub const Repository = struct {
                     self.git_dir = dir.openDir(".git", .{ .iterate = true }) catch |err| return err;
                     return true;
                 }
+            }
+            // if current directory is root
+            if (std.mem.eql(u8, cwd, fs.path.sep_str)) {
+                return false;
             }
 
             // try to resolve path to the parent
