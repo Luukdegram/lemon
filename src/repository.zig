@@ -155,7 +155,7 @@ pub const Repository = struct {
     }
 
     /// Finds an object by its name
-    pub fn findObject(repo: *Repository, name: []const u8) !?Object {
+    pub fn findObject(repo: *Repository, name: []const u8) !?*Object {
         const results = (try resolvePart(repo, name)) orelse return null;
         defer {
             for (results) |result| {

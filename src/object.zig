@@ -15,8 +15,6 @@ const ReadError = error{
 const Kind = enum {
     blob,
     commit,
-    tree,
-    tag,
 };
 
 /// Header of a object file
@@ -55,11 +53,10 @@ fn kindToString(kind: Kind) []const u8 {
 
 pub const Object = struct {
     kind: Kind,
-    data: []const u8,
 
     /// Finds the corresponding object file and decodes the decompressed data
     /// The memory owned by `Object` is owned by the caller and must be freed by the caller
-    pub fn decode(repo: *Repository, hash: []const u8) !Object {
+    pub fn decode(repo: *Repository, hash: []const u8) !*Object {
         const path = try fs.path.join(repo.gpa, &[_][]const u8{
             "objects",
             hash[0..2],
@@ -77,9 +74,22 @@ pub const Object = struct {
 
         const header = try parseHeader(data);
 
-        return Object{
-            .data = try repo.gpa.dupe(u8, data[header.offset..]),
-            .kind = header.kind,
+        return switch (header.kind) {
+            .blob => {
+                const blob = try repo.gpa.create(Blob);
+                blob.* = .{
+                    .base = Object{ .kind = .blob },
+                    .data = try repo.gpa.dupe(u8, data[header.offset..]),
+                };
+
+                return &blob.base;
+            },
+            .commit => {
+                const commit = try repo.gpa.create(Commit);
+                commit.* = Commit.deserialize(try repo.gpa.dupe(u8, data[header.offset..]));
+
+                return &commit.base;
+            },
         };
     }
 
@@ -131,10 +141,16 @@ pub const Object = struct {
     }
 
     /// Serializes an object and writes it to a stream
-    pub fn serialize(self: Object, writer: anytype) @TypeOf(writer).Error!void {
+    pub fn serialize(self: *Object, writer: anytype) @TypeOf(writer).Error!void {
         switch (self.kind) {
-            .blob => try writer.writeAll(self.data),
-            else => {},
+            .blob => {
+                const blob = @fieldParentPtr(Blob, "base", self);
+                try writer.writeAll(blob.data);
+            },
+            .commit => {
+                const commit = @fieldParentPtr(Commit, "base", self);
+                try writer.writeAll(commit.message.?);
+            },
         }
     }
 
@@ -143,25 +159,92 @@ pub const Object = struct {
     pub fn deserialize(self: *Object, buffer: []const u8) Object {
         switch (self.kind) {
             .blob => self.data = buffer,
-            else => {},
+            .commit => {
+                const commit = Commit.deserialize(buffer);
+                std.debug.print("Commit: {}\n", .{commit});
+            },
         }
     }
 };
 
 pub const Blob = struct {
-    base: Kind,
+    base: Object,
     data: []const u8,
-
-    /// Blobs is just all file data and can be returned without deserializing
-    pub fn deserialize(self: Blog) []const u8 {
-        return self.data;
-    }
 };
 
 pub const Tree = struct {
-    base: Kind,
+    base: Object,
     data: []const u8,
 };
+
+pub const Commit = struct {
+    base: Object,
+    tree: ?[]const u8,
+    parent: ?[]const u8,
+    author: ?[]const u8,
+    comitter: ?[]const u8,
+    gpgsig: ?[]const u8,
+    message: ?[]const u8,
+
+    /// Deserializes the `buffer` data into a `Commit`
+    pub fn deserialize(buffer: []const u8) Commit {
+        const State = enum { key, value };
+
+        var state = State.key;
+        var commit = Commit{
+            .base = Object{ .kind = .commit },
+            .tree = null,
+            .parent = null,
+            .author = null,
+            .comitter = null,
+            .gpgsig = null,
+            .message = null,
+        };
+
+        var last_key: []const u8 = undefined;
+        var last_value: []const u8 = undefined;
+        var prev: u8 = undefined;
+
+        var index: usize = 0;
+        for (buffer) |c, i| {
+            switch (state) {
+                .key => {
+                    if (c == ' ') {
+                        last_key = buffer[index..i];
+                        index = i + 1;
+                        state = .value;
+                        continue;
+                    }
+                    if (c == '\n') {
+                        break;
+                    }
+                },
+                .value => {
+                    if (prev == '\n' and c != ' ') {
+                        last_value = buffer[index .. i - 1];
+                        index += last_value.len;
+                        state = .key;
+                        std.debug.print("Value: {}\n", .{last_value});
+                        inline for (@typeInfo(Commit).Struct.fields) |field| {
+                            if (std.mem.eql(u8, field.name, last_key)) {
+                                switch (@TypeOf(@field(commit, field.name))) {
+                                    ?[]const u8 => @field(commit, field.name) = last_value,
+                                    else => {},
+                                }
+                            }
+                        }
+                    }
+                },
+            }
+            prev = c;
+        }
+        commit.message = buffer[index..buffer.len];
+
+        return commit;
+    }
+};
+
+fn parseCommit(buffer: []const u8) !Commit {}
 
 test "Test decode" {
     var repo = try Repository.find(std.testing.allocator);
