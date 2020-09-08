@@ -53,32 +53,32 @@ fn kindToString(kind: Kind) []const u8 {
     return @tagName(kind);
 }
 
-const Object = struct {
+pub const Object = struct {
     kind: Kind,
     data: []const u8,
 
     /// Finds the corresponding object file and decodes the decompressed data
     /// The memory owned by `Object` is owned by the caller and must be freed by the caller
-    pub fn decode(repo: Repository, gpa: *Allocator, hash: []const u8) !Object {
-        const path = try fs.path.join(gpa, &[_][]const u8{
+    pub fn decode(repo: *Repository, hash: []const u8) !Object {
+        const path = try fs.path.join(repo.gpa, &[_][]const u8{
             "objects",
             hash[0..2],
             hash[2..],
         });
-        defer gpa.free(path);
+        defer repo.gpa.free(path);
 
         const file = try repo.git_dir.openFile(path, .{ .read = true });
         defer file.close();
 
-        var zlib_stream = try std.compress.zlib.zlibStream(gpa, file.reader());
-        defer gpa.free(zlib_stream.window_slice);
-        const data = try zlib_stream.reader().readAllAlloc(gpa, std.math.maxInt(usize));
-        defer gpa.free(data);
+        var zlib_stream = try std.compress.zlib.zlibStream(repo.gpa, file.reader());
+        defer repo.gpa.free(zlib_stream.window_slice);
+        const data = try zlib_stream.reader().readAllAlloc(repo.gpa, std.math.maxInt(usize));
+        defer repo.gpa.free(data);
 
         const header = try parseHeader(data);
 
         return Object{
-            .data = try gpa.dupe(u8, data[header.offset..]),
+            .data = try repo.gpa.dupe(u8, data[header.offset..]),
             .kind = header.kind,
         };
     }
@@ -130,15 +130,19 @@ const Object = struct {
         try file.writeAll(buffer);
     }
 
-    /// Finds an object by its name
-    pub fn find(repo: Repository, name: []const u8) []const u8 {
-        return name;
+    /// Serializes an object and writes it to a stream
+    pub fn serialize(self: Object, writer: anytype) @TypeOf(writer).Error!void {
+        switch (self.kind) {
+            .blob => try writer.writeAll(self.data),
+            else => {},
+        }
     }
 
-    /// Deserializes an object and writes it to a stream
-    pub fn deserialize(self: Object, writer: anytype) @TypeOf(writer).Error!void {
-        switch (self) {
-            .blob => try writer.writeAll(self.data),
+    /// Deserializes the data and writes it to the object file
+    /// Data is owned by the caller
+    pub fn deserialize(self: *Object, buffer: []const u8) Object {
+        switch (self.kind) {
+            .blob => self.data = buffer,
             else => {},
         }
     }
@@ -163,6 +167,7 @@ test "Test decode" {
     var repo = try Repository.find(std.testing.allocator);
     defer repo.?.deinit();
 
-    const object = try Object.decode(repo.?, std.testing.allocator, "0f8398dd58a927a580f48ae7cdad927fab8dfd69");
+    const object = try Object.decode(repo.?, std.testing.allocator, "8bc9a453e049d06ba4eaac24297d371de53c9603");
     defer std.testing.allocator.free(object.data);
+    std.debug.print("{}\n", .{object.data});
 }

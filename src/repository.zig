@@ -3,17 +3,19 @@ const Allocator = std.mem.Allocator;
 const os = std.os;
 const fs = std.fs;
 const testing = std.testing;
+const Object = @import("object.zig").Object;
 
 pub const Repository = struct {
     working_tree: fs.Dir,
     git_dir: fs.Dir,
-    working_path: []const u8,
+    working_path: []const u8 = "",
     gpa: *Allocator,
 
     /// Find will try to look for a Git repository from within the current working directory.
     /// It searches recursively through its parents. Will return null if no Repository is found
     pub fn find(gpa: *Allocator) !?Repository {
         var repo: Repository = undefined;
+        repo.gpa = gpa;
 
         // cwd does not have iterate rights, therefore re-open current working directory with correct rights.
         var dir = try fs.cwd().openDir(".", .{ .iterate = true });
@@ -30,7 +32,7 @@ pub const Repository = struct {
             while (try dir_it.next()) |entry| {
                 if (std.mem.eql(u8, entry.name, ".git") and entry.kind == fs.Dir.Entry.Kind.Directory) {
                     repo.working_tree = dir;
-
+                    repo.working_path = try gpa.dupe(u8, cwd);
                     repo.git_dir = try dir.openDir(".git", .{ .iterate = true });
                     return repo;
                 }
@@ -105,6 +107,69 @@ pub const Repository = struct {
             .git_dir = git_dir,
             .gpa = gpa,
         };
+    }
+
+    /// Resolves the possible hashes based on a name given. The `name` can be part of the hash,
+    /// a tag, the HEAD, etc.
+    pub fn resolvePart(repo: *Repository, name: []const u8) !?[][]const u8 {
+        if (name.len < 4) return null;
+
+        var list = std.ArrayList([]const u8).init(repo.gpa);
+        errdefer {
+            for (list.items) |item| {
+                repo.gpa.free(item);
+            }
+            list.deinit();
+        }
+
+        // Resolve by ref
+        if (std.mem.eql(u8, name, "HEAD")) {}
+
+        // If hash, return hash itself
+        if (name.len == 40) {
+            try list.append(name);
+            return list.toOwnedSlice();
+        }
+
+        // Our return hash, all lowercase
+        var low_case = try std.ascii.allocLowerString(repo.gpa, name);
+        defer repo.gpa.free(low_case);
+
+        // generate our path to objects folder
+        var path: [10]u8 = undefined;
+        std.mem.copy(u8, path[0..9], "objects/");
+        std.mem.copy(u8, path[8..10], low_case[0..2]);
+
+        var obj_dir = try repo.git_dir.openDir(path[0..], .{ .iterate = true });
+        var it = obj_dir.iterate();
+        while (try it.next()) |entry| {
+            if (std.mem.startsWith(u8, entry.name, low_case[2..])) {
+                var hash = try repo.gpa.alloc(u8, entry.name.len + 2);
+                std.mem.copy(u8, hash[0..2], low_case[0..2]);
+                std.mem.copy(u8, hash[2..], entry.name);
+                try list.append(hash);
+            }
+        }
+
+        return list.toOwnedSlice();
+    }
+
+    /// Finds an object by its name
+    pub fn findObject(repo: *Repository, name: []const u8) !?Object {
+        const results = (try resolvePart(repo, name)) orelse return null;
+        defer {
+            for (results) |result| {
+                repo.gpa.free(result);
+            }
+            repo.gpa.free(results);
+        }
+        if (results.len > 1) return error.MultipleResults;
+
+        const hash = results[0];
+
+        // for now just return object
+        // soon we can return a specific commit, tag or tree
+        return try Object.decode(repo, hash);
     }
 
     /// Closes the directories so other processes can use them.

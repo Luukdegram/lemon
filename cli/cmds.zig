@@ -27,6 +27,7 @@ pub const hash = Flag{
     .help =
     \\Creates a unique object ID and stores it as an object file, 
     \\acceptable arguments: -t, -w, path
+    \\-w        Will generate an object ID as well as write it to an object file
     ,
     .handle = handleHash,
 };
@@ -47,9 +48,18 @@ fn handleInit(gpa: *Allocator, args: [][]const u8, writer: anytype) !void {
 }
 
 fn handleCat(gpa: *Allocator, args: [][]const u8, writer: anytype) !void {
-    var path = if (args.len == 1) return writer.print("Expected object hash: {}\n", .{cat.help});
+    var name = if (args.len > 1) args[1] else return writer.print("Expected object hash: {}\n", .{cat.help});
 
     var repo = (try Repository.find(gpa)) orelse return writer.writeAll("Not a Git repository\n");
+    const obj = repo.findObject(name) catch |err| return if (err == error.MultipleResults)
+        return writer.writeAll("Multiple objects were found, please specify further\n")
+    else
+        return err;
+
+    if (obj) |o|
+        try o.serialize(writer)
+    else
+        try writer.writeAll("No object file found\n");
 }
 
 fn handleHash(gpa: *Allocator, args: [][]const u8, writer: anytype) !void {}
