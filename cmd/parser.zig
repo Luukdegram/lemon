@@ -1,15 +1,16 @@
 const std = @import("std");
+
 /// Parse will attempt to parse the arguments. Possibly returns
 /// `error.NoExecutableName` incase no executable was provided.
 /// Note that the executable is not part of the result itself.
-pub fn Parse(allocator: *std.mem.Allocator) !ParseResult {
+pub fn parse(allocator: *std.mem.Allocator) !ParseResult {
     var args = std.process.args();
 
     // Attempt to get the executable and leave it out of the rest
     const exe = try (args.next(allocator) orelse {
         return error.NoExecutableName;
     });
-    errdefer allocator.free(exe);
+    defer allocator.free(exe);
 
     // create an Arena allocator so we can free all memory at once
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -21,7 +22,7 @@ pub fn Parse(allocator: *std.mem.Allocator) !ParseResult {
         try argList.append(arg);
     }
 
-    return ParseResult{ .args = argList.toOwnedSlice(), .arena = arena };
+    return ParseResult{ .args = argList.toOwnedSlice(), .arena = arena.state, .gpa = allocator };
 }
 
 /// ParseResult is the resultset from Parser.
@@ -30,18 +31,18 @@ pub const ParseResult = struct {
     const Self = @This();
 
     args: [][]const u8,
-    arena: std.heap.ArenaAllocator,
+    arena: std.heap.ArenaAllocator.State,
+    gpa: *std.mem.Allocator,
 
-    fn len(self: Self) usize {
+    pub fn len(self: Self) usize {
         return self.args.len;
     }
 
-    fn isEmpty(self: Self) bool {
+    pub fn isEmpty(self: Self) bool {
         return self.len() == 0;
     }
 
-    fn deinit(self: Self) void {
-        self.arena.child_allocator.free(self.args);
-        self.arena.deinit();
+    pub fn deinit(self: Self) void {
+        self.arena.promote(self.gpa).deinit();
     }
 };
