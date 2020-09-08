@@ -6,7 +6,6 @@ usingnamespace @import("repository.zig");
 
 /// Errors that can be thrown while decoding an object file
 const ReadError = error{
-    RepositoryNotInitialized,
     BadFile,
     InvalidType,
     InvalidSize,
@@ -60,9 +59,7 @@ const Object = struct {
 
     /// Finds the corresponding object file and decodes the decompressed data
     /// The memory owned by `Object` is owned by the caller and must be freed by the caller
-    pub fn decode(repo: Repository, gpa: *Allocator, hash: []const u8) !*Object {
-        if (!repo.initialized()) return ReadError.RepositoryNotInitialized;
-
+    pub fn decode(repo: Repository, gpa: *Allocator, hash: []const u8) !Object {
         const path = try fs.path.join(gpa, &[_][]const u8{
             "objects",
             hash[0..2],
@@ -70,7 +67,7 @@ const Object = struct {
         });
         defer gpa.free(path);
 
-        const file = try repo.git_dir.?.openFile(path, .{ .read = true });
+        const file = try repo.git_dir.openFile(path, .{ .read = true });
         defer file.close();
 
         var zlib_stream = try std.compress.zlib.zlibStream(gpa, file.reader());
@@ -163,9 +160,9 @@ pub const Tree = struct {
 };
 
 test "Test decode" {
-    var repo = Repository.init(std.testing.allocator, ".");
-    std.testing.expect(try repo.find());
+    var repo = try Repository.find(std.testing.allocator);
+    defer repo.?.deinit();
 
-    const object = try Object.decode(repo, std.testing.allocator, "0f8398dd58a927a580f48ae7cdad927fab8dfd69");
+    const object = try Object.decode(repo.?, std.testing.allocator, "0f8398dd58a927a580f48ae7cdad927fab8dfd69");
     defer std.testing.allocator.free(object.data);
 }
