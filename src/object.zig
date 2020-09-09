@@ -13,7 +13,17 @@ const ReadError = error{
 
 /// Object's kind
 const Kind = enum {
-    blob, commit, tree
+    blob,
+    commit,
+    tree,
+
+    pub fn Type(self: Kind) type {
+        return switch (self) {
+            .commit => Commit,
+            .blob => Blob,
+            .tree => Tree,
+        };
+    }
 };
 
 /// Header of a object file
@@ -24,7 +34,7 @@ const Header = struct {
 };
 
 /// Parses the given buffer in a `Header` struct
-fn parseHeader(buffer: []u8) (ReadError || std.fmt.ParseIntError)!Header {
+fn parseHeader(buffer: []const u8) (ReadError || std.fmt.ParseIntError)!Header {
     var i: usize = 0;
     while (i < buffer.len) : (i += 1) if (buffer[i] == ' ') break;
 
@@ -154,37 +164,37 @@ pub const Object = struct {
     pub fn serialize(self: *Object, writer: anytype) @TypeOf(writer).Error!void {
         switch (self.kind) {
             .blob => {
-                const blob = @fieldParentPtr(Blob, "base", self);
+                const blob = self.cast(.blob).?;
                 try writer.writeAll(blob.data);
             },
             .commit => {
-                const commit = @fieldParentPtr(Commit, "base", self);
+                const commit = self.cast(.commit).?;
                 try writer.print("{}\n", .{commit.message.?});
             },
             .tree => {
-                const tree = @fieldParentPtr(Tree, "base", self);
+                const tree = self.cast(.tree).?;
                 try writer.print("{}\n", .{tree.leafs[0].hash});
             },
         }
     }
 
+    /// Returns the Typed Object with its data
+    /// Returns null if the kind of the given `Object` is not the same
+    /// as the expected `kind`.
+    pub fn cast(self: *Object, comptime kind: Kind) ?*kind.Type() {
+        if (self.kind != kind) return null;
+
+        return @fieldParentPtr(kind.Type(), "base", self);
+    }
+
+    /// Returns the corresponding `type` of the `Kind`.
     /// Frees the object's memory, this has to be called after calling
     /// `Object.decode()`
     pub fn deinit(self: *Object, gpa: *Allocator) void {
         switch (self.kind) {
-            .blob => {
-                const blob = @fieldParentPtr(Blob, "base", self);
-                gpa.free(blob.data);
-                gpa.destroy(blob);
-            },
-            .commit => {
-                const commit = @fieldParentPtr(Commit, "base", self);
-                commit.deinit(gpa);
-            },
-            .tree => {
-                const tree = @fieldParentPtr(Tree, "base", self);
-                tree.deinit(gpa);
-            },
+            .blob => self.cast(.blob).?.deinit(gpa),
+            .commit => self.cast(.commit).?.deinit(gpa),
+            .tree => self.cast(.tree).?.deinit(gpa),
         }
     }
 };
@@ -199,6 +209,12 @@ pub const Blob = struct {
             .base = .{ .kind = .blob },
             .data = buffer,
         };
+    }
+
+    /// Frees Blob's memory
+    pub fn deinit(self: *Blob, gpa: *Allocator) void {
+        gpa.free(self.data);
+        gpa.destroy(self);
     }
 };
 
@@ -339,7 +355,9 @@ pub const Commit = struct {
             }
             prev = c;
         }
-        commit.message = buffer[index..buffer.len];
+
+        // -1 because we don't want the \n in our message at the end
+        commit.message = buffer[index .. buffer.len - 1];
 
         return commit;
     }
