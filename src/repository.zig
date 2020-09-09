@@ -68,7 +68,7 @@ pub const Repository = struct {
     }
 
     /// Attempts to create a new Git repository from the current path
-    /// Memory of `path` is owned by the caller
+    /// Memory is owned by the Repository and must be freed by calling deinit()
     pub fn create(gpa: *Allocator, path: []const u8) !Repository {
         var tmp = fs.cwd();
 
@@ -102,7 +102,7 @@ pub const Repository = struct {
         try config_file.writeAll(configFile);
 
         return Repository{
-            .working_path = path,
+            .working_path = try gpa.dupe(u8, path),
             .working_tree = working_tree,
             .git_dir = git_dir,
             .gpa = gpa,
@@ -111,7 +111,7 @@ pub const Repository = struct {
 
     /// Resolves the possible hashes based on a name given. The `name` can be part of the hash,
     /// a tag, the HEAD, etc.
-    pub fn resolvePart(repo: *Repository, name: []const u8) !?[][]const u8 {
+    pub fn resolvePart(repo: Repository, name: []const u8) !?[][]const u8 {
         if (name.len < 4) return null;
 
         var list = std.ArrayList([]const u8).init(repo.gpa);
@@ -155,7 +155,7 @@ pub const Repository = struct {
     }
 
     /// Finds an object by its name
-    pub fn findObject(repo: *Repository, name: []const u8) !?*Object {
+    pub fn findObject(repo: Repository, name: []const u8) !?*Object {
         const results = (try resolvePart(repo, name)) orelse return null;
         defer {
             for (results) |result| {
@@ -174,6 +174,7 @@ pub const Repository = struct {
 
     /// Closes the directories so other processes can use them.
     pub fn deinit(self: *Repository) void {
+        self.gpa.free(self.working_path);
         self.git_dir.close();
         self.working_tree.close();
     }

@@ -56,7 +56,7 @@ pub const Object = struct {
 
     /// Finds the corresponding object file and decodes the decompressed data
     /// The memory owned by `Object` is owned by the caller and must be freed by the caller
-    pub fn decode(repo: *Repository, hash: []const u8) !*Object {
+    pub fn decode(repo: Repository, hash: []const u8) !*Object {
         const path = try fs.path.join(repo.gpa, &[_][]const u8{
             "objects",
             hash[0..2],
@@ -149,19 +149,22 @@ pub const Object = struct {
             },
             .commit => {
                 const commit = @fieldParentPtr(Commit, "base", self);
-                try writer.writeAll(commit.message.?);
+                //try writer.print("{}\n", .{commit});
             },
         }
     }
 
-    /// Deserializes the data and writes it to the object file
-    /// Data is owned by the caller
-    pub fn deserialize(self: *Object, buffer: []const u8) Object {
+    /// Frees the object's memory
+    pub fn deinit(self: *Object, gpa: *Allocator) void {
         switch (self.kind) {
-            .blob => self.data = buffer,
+            .blob => {
+                const blob = @fieldParentPtr(Blob, "base", self);
+                gpa.free(blob.data);
+                gpa.destroy(blob);
+            },
             .commit => {
-                const commit = Commit.deserialize(buffer);
-                std.debug.print("Commit: {}\n", .{commit});
+                const commit = @fieldParentPtr(Commit, "base", self);
+                commit.deinit(gpa);
             },
         }
     }
@@ -182,9 +185,10 @@ pub const Commit = struct {
     tree: ?[]const u8,
     parent: ?[]const u8,
     author: ?[]const u8,
-    comitter: ?[]const u8,
+    committer: ?[]const u8,
     gpgsig: ?[]const u8,
     message: ?[]const u8,
+    data: []const u8,
 
     /// Deserializes the `buffer` data into a `Commit`
     pub fn deserialize(buffer: []const u8) Commit {
@@ -196,9 +200,10 @@ pub const Commit = struct {
             .tree = null,
             .parent = null,
             .author = null,
-            .comitter = null,
+            .committer = null,
             .gpgsig = null,
             .message = null,
+            .data = buffer,
         };
 
         var last_key: []const u8 = undefined;
@@ -211,26 +216,29 @@ pub const Commit = struct {
                 .key => {
                     if (c == ' ') {
                         last_key = buffer[index..i];
-                        index = i + 1;
-                        state = .value;
-                        continue;
+                        inline for (@typeInfo(Commit).Struct.fields) |field| {
+                            if (std.mem.eql(u8, field.name, last_key)) {
+                                if (@hasField(Commit, field.name)) {
+                                    index = i + 1;
+                                    state = .value;
+                                }
+                            }
+                        }
                     }
                     if (c == '\n') {
+                        index += 1;
                         break;
                     }
                 },
                 .value => {
                     if (prev == '\n' and c != ' ') {
                         last_value = buffer[index .. i - 1];
-                        index += last_value.len;
+                        index += last_value.len + 1;
                         state = .key;
-                        std.debug.print("Value: {}\n", .{last_value});
                         inline for (@typeInfo(Commit).Struct.fields) |field| {
                             if (std.mem.eql(u8, field.name, last_key)) {
-                                switch (@TypeOf(@field(commit, field.name))) {
-                                    ?[]const u8 => @field(commit, field.name) = last_value,
-                                    else => {},
-                                }
+                                if (@TypeOf(@field(commit, field.name)) == ?[]const u8)
+                                    @field(commit, field.name) = last_value;
                             }
                         }
                     }
@@ -242,6 +250,12 @@ pub const Commit = struct {
 
         return commit;
     }
+
+    /// Frees memory of the Object
+    pub fn deinit(self: *Commit, gpa: *Allocator) void {
+        gpa.free(self.data);
+        gpa.destroy(self);
+    }
 };
 
 fn parseCommit(buffer: []const u8) !Commit {}
@@ -252,5 +266,4 @@ test "Test decode" {
 
     const object = try Object.decode(repo.?, std.testing.allocator, "8bc9a453e049d06ba4eaac24297d371de53c9603");
     defer std.testing.allocator.free(object.data);
-    std.debug.print("{}\n", .{object.data});
 }

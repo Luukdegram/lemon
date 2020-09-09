@@ -51,14 +51,17 @@ fn handleCat(gpa: *Allocator, args: [][]const u8, writer: anytype) !void {
     var name = if (args.len > 1) args[1] else return writer.print("Expected object hash: {}\n", .{cat.help});
 
     var repo = (try Repository.find(gpa)) orelse return writer.writeAll("Not a Git repository\n");
+    defer repo.deinit();
+
     const obj = repo.findObject(name) catch |err| return if (err == error.MultipleResults)
         return writer.writeAll("Multiple objects were found, please specify further\n")
     else
         return err;
 
-    if (obj) |o|
-        try o.serialize(writer)
-    else
+    if (obj) |o| {
+        defer o.deinit(gpa);
+        try o.serialize(writer);
+    } else
         try writer.writeAll("No object file found\n");
 }
 

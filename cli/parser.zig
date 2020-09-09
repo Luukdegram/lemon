@@ -16,7 +16,7 @@ pub fn parse(allocator: *std.mem.Allocator) !ParseResult {
     var arena = std.heap.ArenaAllocator.init(allocator);
 
     // Create and fill our arguments list
-    var argList = std.ArrayList([]const u8).init(allocator);
+    var argList = std.ArrayList([]const u8).init(&arena.allocator);
     while (args.next(&arena.allocator)) |argument| {
         const arg = try argument;
         try argList.append(arg);
