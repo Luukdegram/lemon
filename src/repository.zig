@@ -127,7 +127,7 @@ pub const Repository = struct {
 
         // If hash, return hash itself
         if (name.len == 40) {
-            try list.append(name);
+            try list.append(try repo.gpa.dupe(u8, name));
             return list.toOwnedSlice();
         }
 
@@ -155,7 +155,7 @@ pub const Repository = struct {
     }
 
     /// Finds an object by its name
-    pub fn findObject(repo: Repository, name: []const u8) !?*Object {
+    pub fn findObject(repo: Repository, gpa: *Allocator, name: []const u8) !?*Object {
         const results = (try resolvePart(repo, name)) orelse return null;
         defer {
             for (results) |result| {
@@ -169,7 +169,7 @@ pub const Repository = struct {
 
         // for now just return object
         // soon we can return a specific commit, tag or tree
-        return try Object.decode(repo, hash);
+        return try Object.decode(repo, gpa, hash);
     }
 
     /// Closes the directories so other processes can use them.

@@ -9,8 +9,6 @@ const log = std.log.default;
 pub fn main() !void {
     var gpa_alloc = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa_alloc.deinit();
-    var arena = std.heap.ArenaAllocator.init(&gpa_alloc.allocator);
-    defer arena.deinit();
     const gpa = &gpa_alloc.allocator;
 
     const cmds_imp = @import("cmds.zig");

@@ -13,8 +13,7 @@ const ReadError = error{
 
 /// Object's kind
 const Kind = enum {
-    blob,
-    commit,
+    blob, commit, tree
 };
 
 /// Header of a object file
@@ -51,44 +50,55 @@ fn kindToString(kind: Kind) []const u8 {
     return @tagName(kind);
 }
 
+/// Object is a type used internally by Git to compress and
+/// store the data of Git objects. An object can be a `Commit`,
+/// `Tree`, `Blob` or `Tag`.
 pub const Object = struct {
     kind: Kind,
 
     /// Finds the corresponding object file and decodes the decompressed data
     /// The memory owned by `Object` is owned by the caller and must be freed by the caller
-    pub fn decode(repo: Repository, hash: []const u8) !*Object {
-        const path = try fs.path.join(repo.gpa, &[_][]const u8{
+    /// this can be done by calling deinit().
+    ///
+    /// `hash` must be a valid, checked, hash with a length of 40.
+    pub fn decode(repo: Repository, gpa: *Allocator, hash: []const u8) !*Object {
+        const path = try fs.path.join(gpa, &[_][]const u8{
             "objects",
             hash[0..2],
             hash[2..],
         });
-        defer repo.gpa.free(path);
+        defer gpa.free(path);
 
         const file = try repo.git_dir.openFile(path, .{ .read = true });
         defer file.close();
 
-        var zlib_stream = try std.compress.zlib.zlibStream(repo.gpa, file.reader());
-        defer repo.gpa.free(zlib_stream.window_slice);
-        const data = try zlib_stream.reader().readAllAlloc(repo.gpa, std.math.maxInt(usize));
-        defer repo.gpa.free(data);
+        var zlib_stream = try std.compress.zlib.zlibStream(gpa, file.reader());
+        defer gpa.free(zlib_stream.window_slice);
+        const data = try zlib_stream.reader().readAllAlloc(gpa, std.math.maxInt(usize));
+        defer gpa.free(data);
 
         const header = try parseHeader(data);
 
+        const allocated_data = try gpa.dupe(u8, data[header.offset..]);
+
         return switch (header.kind) {
             .blob => {
-                const blob = try repo.gpa.create(Blob);
-                blob.* = .{
-                    .base = Object{ .kind = .blob },
-                    .data = try repo.gpa.dupe(u8, data[header.offset..]),
-                };
+                const blob = try gpa.create(Blob);
+                blob.* = Blob.deserialize(allocated_data);
 
                 return &blob.base;
             },
             .commit => {
-                const commit = try repo.gpa.create(Commit);
-                commit.* = Commit.deserialize(try repo.gpa.dupe(u8, data[header.offset..]));
+                const commit = try gpa.create(Commit);
+                commit.* = Commit.deserialize(allocated_data);
 
                 return &commit.base;
+            },
+            .tree => {
+                const tree = try gpa.create(Tree);
+                tree.* = try Tree.deserialize(gpa, allocated_data);
+
+                return &tree.base;
             },
         };
     }
@@ -149,12 +159,17 @@ pub const Object = struct {
             },
             .commit => {
                 const commit = @fieldParentPtr(Commit, "base", self);
-                //try writer.print("{}\n", .{commit});
+                try writer.print("{}\n", .{commit.message.?});
+            },
+            .tree => {
+                const tree = @fieldParentPtr(Tree, "base", self);
+                try writer.print("{}\n", .{tree.leafs[0].hash});
             },
         }
     }
 
-    /// Frees the object's memory
+    /// Frees the object's memory, this has to be called after calling
+    /// `Object.decode()`
     pub fn deinit(self: *Object, gpa: *Allocator) void {
         switch (self.kind) {
             .blob => {
@@ -166,6 +181,10 @@ pub const Object = struct {
                 const commit = @fieldParentPtr(Commit, "base", self);
                 commit.deinit(gpa);
             },
+            .tree => {
+                const tree = @fieldParentPtr(Tree, "base", self);
+                tree.deinit(gpa);
+            },
         }
     }
 };
@@ -173,11 +192,84 @@ pub const Object = struct {
 pub const Blob = struct {
     base: Object,
     data: []const u8,
+
+    /// Simply returns a new `Blob` object as buffer already contains the raw data
+    pub fn deserialize(buffer: []const u8) Blob {
+        return .{
+            .base = .{ .kind = .blob },
+            .data = buffer,
+        };
+    }
 };
 
 pub const Tree = struct {
     base: Object,
+    leafs: []Leaf,
+    /// Raw data of `Tree`, used to free all data at once
     data: []const u8,
+
+    /// Leaf that belongs to a Tree which can point to commits
+    pub const Leaf = struct {
+        mode: []const u8,
+        path: []const u8,
+        hash: []const u8,
+    };
+
+    /// Parses the input `buffer` and turns it into a `Tree` `Object`
+    /// Memory is owned by the returned Tree object.
+    pub fn deserialize(gpa: *Allocator, buffer: []const u8) !Tree {
+        var leafs = std.ArrayList(Leaf).init(gpa);
+        errdefer {
+            for (leafs.items) |leaf| gpa.free(leaf.hash);
+            leafs.deinit();
+        }
+
+        var pos: usize = 0;
+        while (pos < buffer.len) {
+            const index = std.mem.indexOf(u8, buffer[pos..], " ").?;
+            const mode = buffer[pos .. pos + index];
+            const end = std.mem.indexOf(u8, buffer[pos + index ..], "\x00").?;
+            const path = buffer[pos + index + 1 .. pos + index + end];
+
+            var hash: [40]u8 = undefined;
+            try bytesToHex(&hash, buffer[end + 1 .. end + 21]);
+            pos += index + end + 21;
+
+            try leafs.append(.{
+                .mode = mode,
+                .path = path,
+                .hash = try gpa.dupe(u8, &hash),
+            });
+        }
+
+        return Tree{
+            .base = .{ .kind = .tree },
+            .leafs = leafs.toOwnedSlice(),
+            .data = buffer,
+        };
+    }
+
+    /// Frees memory of Tree object
+    /// Expected to be called on Tree object after Object.decode() has created this object
+    pub fn deinit(self: *Tree, gpa: *Allocator) void {
+        for (self.leafs) |leaf| {
+            gpa.free(leaf.hash);
+        }
+        gpa.free(self.leafs);
+        gpa.free(self.data);
+        gpa.destroy(self);
+    }
+
+    /// Converts a slice to a Hex string
+    fn bytesToHex(out: []u8, input: []const u8) !void {
+        if (out.len / 2 != input.len) return error.InvalidSize;
+
+        var i: usize = 0;
+        while (i != input.len) : (i += 1) {
+            out[i * 2] = std.fmt.digitToChar((input[i] >> 4) & 0xF, true);
+            out[i * 2 + 1] = std.fmt.digitToChar(input[i] & 0xF, true);
+        }
+    }
 };
 
 pub const Commit = struct {
@@ -188,6 +280,7 @@ pub const Commit = struct {
     committer: ?[]const u8,
     gpgsig: ?[]const u8,
     message: ?[]const u8,
+    /// contains complete commit data, used to free all memory at once
     data: []const u8,
 
     /// Deserializes the `buffer` data into a `Commit`
@@ -258,12 +351,10 @@ pub const Commit = struct {
     }
 };
 
-fn parseCommit(buffer: []const u8) !Commit {}
-
 test "Test decode" {
     var repo = try Repository.find(std.testing.allocator);
     defer repo.?.deinit();
 
     const object = try Object.decode(repo.?, std.testing.allocator, "8bc9a453e049d06ba4eaac24297d371de53c9603");
-    defer std.testing.allocator.free(object.data);
+    defer object.deinit(std.testing.allocator);
 }

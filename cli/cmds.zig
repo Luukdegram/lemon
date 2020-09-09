@@ -53,7 +53,7 @@ fn handleCat(gpa: *Allocator, args: [][]const u8, writer: anytype) !void {
     var repo = (try Repository.find(gpa)) orelse return writer.writeAll("Not a Git repository\n");
     defer repo.deinit();
 
-    const obj = repo.findObject(name) catch |err| return if (err == error.MultipleResults)
+    const obj = repo.findObject(gpa, name) catch |err| return if (err == error.MultipleResults)
         return writer.writeAll("Multiple objects were found, please specify further\n")
     else
         return err;
