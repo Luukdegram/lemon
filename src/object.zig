@@ -1,22 +1,26 @@
 const std = @import("std");
 const fs = std.fs;
 const Allocator = std.mem.Allocator;
-
-usingnamespace @import("repository.zig");
+const Repository = @import("repository.zig").Repository;
 
 /// Errors that can be thrown while decoding an object file
 const ReadError = error{
-    BadFile,
+    /// Object file contains an incorrect type
     InvalidType,
+    /// Size in object file does not match expected length
     InvalidSize,
 };
 
 /// Object's kind
 const Kind = enum {
+    /// Raw file data
     blob,
+    /// Commit object, containing information such as tree, author, etc
     commit,
+    /// Contains all leaf objects
     tree,
 
+    /// Returns the `type` that corresponds to the `Kind`
     pub fn Type(self: Kind) type {
         return switch (self) {
             .commit => Commit,
@@ -26,10 +30,13 @@ const Kind = enum {
     }
 };
 
-/// Header of a object file
+/// Header of an object file
 const Header = struct {
+    /// object type
     kind: Kind,
+    /// data size
     size: usize,
+    /// offset of where the data starts after the header
     offset: usize,
 };
 
@@ -90,22 +97,26 @@ pub const Object = struct {
         const header = try parseHeader(data);
 
         const allocated_data = try gpa.dupe(u8, data[header.offset..]);
+        errdefer gpa.free(allocated_data);
 
         return switch (header.kind) {
             .blob => {
                 const blob = try gpa.create(Blob);
+                errdefer gpa.destroy(blob);
                 blob.* = Blob.deserialize(allocated_data);
 
                 return &blob.base;
             },
             .commit => {
                 const commit = try gpa.create(Commit);
+                errdefer gpa.destroy(commit);
                 commit.* = Commit.deserialize(allocated_data);
 
                 return &commit.base;
             },
             .tree => {
                 const tree = try gpa.create(Tree);
+                errdefer gpa.destroy(tree);
                 tree.* = try Tree.deserialize(gpa, allocated_data);
 
                 return &tree.base;
@@ -160,7 +171,8 @@ pub const Object = struct {
         try file.writeAll(buffer);
     }
 
-    /// Serializes an object and writes it to a stream
+    /// Serializes an object and writes it to a stream for now, this can be removed when encode is
+    /// fully implemented
     pub fn serialize(self: *Object, writer: anytype) @TypeOf(writer).Error!void {
         switch (self.kind) {
             .blob => {
@@ -169,7 +181,7 @@ pub const Object = struct {
             },
             .commit => {
                 const commit = self.cast(.commit).?;
-                try writer.print("{}\n", .{commit.message.?});
+                try writer.print("{}\n", .{commit.message});
             },
             .tree => {
                 const tree = self.cast(.tree).?;
@@ -199,8 +211,10 @@ pub const Object = struct {
     }
 };
 
+/// Blob object that contains raw file data
 pub const Blob = struct {
     base: Object,
+    /// raw file data
     data: []const u8,
 
     /// Simply returns a new `Blob` object as buffer already contains the raw data
@@ -218,6 +232,8 @@ pub const Blob = struct {
     }
 };
 
+/// Tree structured object that points to `Leaf` objects
+/// which contain a mode, path and hash
 pub const Tree = struct {
     base: Object,
     leafs: []Leaf,
@@ -226,14 +242,17 @@ pub const Tree = struct {
 
     /// Leaf that belongs to a Tree which can point to commits
     pub const Leaf = struct {
-        mode: []const u8,
+        /// file mode
+        mode: usize,
+        /// path of the 'file'
         path: []const u8,
+        /// corresponding hash
         hash: []const u8,
     };
 
     /// Parses the input `buffer` and turns it into a `Tree` `Object`
     /// Memory is owned by the returned Tree object.
-    pub fn deserialize(gpa: *Allocator, buffer: []const u8) !Tree {
+    pub fn deserialize(gpa: *Allocator, buffer: []u8) !Tree {
         var leafs = std.ArrayList(Leaf).init(gpa);
         errdefer {
             for (leafs.items) |leaf| gpa.free(leaf.hash);
@@ -244,17 +263,20 @@ pub const Tree = struct {
         while (pos < buffer.len) {
             const index = std.mem.indexOf(u8, buffer[pos..], " ").?;
             const mode = buffer[pos .. pos + index];
-            const end = std.mem.indexOf(u8, buffer[pos + index ..], "\x00").?;
-            const path = buffer[pos + index + 1 .. pos + index + end];
+            pos += index;
+            const end = std.mem.indexOf(u8, buffer[pos..], "\x00").?;
+            const path = buffer[pos + 1 .. pos + end];
+            pos += path.len + 1;
 
             var hash: [40]u8 = undefined;
-            try bytesToHex(&hash, buffer[end + 1 .. end + 21]);
-            pos += index + end + 21;
+            try bytesToHex(&hash, buffer[pos .. pos + 20]);
+
+            pos += 21;
 
             try leafs.append(.{
-                .mode = mode,
+                .mode = try std.fmt.parseInt(usize, mode, 10),
                 .path = path,
-                .hash = try gpa.dupe(u8, &hash),
+                .hash = try gpa.dupe(u8, hash[2..]),
             });
         }
 
@@ -280,24 +302,43 @@ pub const Tree = struct {
     fn bytesToHex(out: []u8, input: []const u8) !void {
         if (out.len / 2 != input.len) return error.InvalidSize;
 
+        const hextable = "0123456789abcdef";
+
         var i: usize = 0;
-        while (i != input.len) : (i += 1) {
-            out[i * 2] = std.fmt.digitToChar((input[i] >> 4) & 0xF, true);
-            out[i * 2 + 1] = std.fmt.digitToChar(input[i] & 0xF, true);
+        for (input) |c| {
+            out[i] = hextable[c >> 4];
+            out[i + 1] = hextable[c & 0x0F];
+            i += 2;
         }
     }
 };
 
+/// Commit `Object` with its optional data
+/// Note that all fields are named after their represental
+/// data fields as this allows for easy parsing
 pub const Commit = struct {
     base: Object,
-    tree: ?[]const u8,
+    /// Points to the hash of the tree
+    tree: []const u8,
+    /// Optional parent's hash
     parent: ?[]const u8,
-    author: ?[]const u8,
-    committer: ?[]const u8,
+    /// Author data
+    author: []const u8,
+    /// Committer data, not neccesairely the same as the `author`
+    committer: []const u8,
+    /// Optional GPG signature
     gpgsig: ?[]const u8,
-    message: ?[]const u8,
+    /// Message emitted when the commit was applied
+    message: []const u8,
     /// contains complete commit data, used to free all memory at once
     data: []const u8,
+
+    /// Returns the `Tree` that the Commit points to
+    pub fn getTree(self: Commit, repo: Repository, gpa: *Allocator) !*Tree {
+        const tree = (try repo.findObject(gpa, self.tree)).?;
+
+        return tree.cast(.tree).?;
+    }
 
     /// Deserializes the `buffer` data into a `Commit`
     pub fn deserialize(buffer: []const u8) Commit {
@@ -306,12 +347,12 @@ pub const Commit = struct {
         var state = State.key;
         var commit = Commit{
             .base = Object{ .kind = .commit },
-            .tree = null,
+            .tree = undefined,
             .parent = null,
-            .author = null,
-            .committer = null,
+            .author = undefined,
+            .committer = undefined,
             .gpgsig = null,
-            .message = null,
+            .message = undefined,
             .data = buffer,
         };
 
@@ -346,7 +387,8 @@ pub const Commit = struct {
                         state = .key;
                         inline for (@typeInfo(Commit).Struct.fields) |field| {
                             if (std.mem.eql(u8, field.name, last_key)) {
-                                if (@TypeOf(@field(commit, field.name)) == ?[]const u8)
+                                if (@TypeOf(@field(commit, field.name)) == ?[]const u8 or
+                                    @TypeOf(@field(commit, field.name)) == []const u8)
                                     @field(commit, field.name) = last_value;
                             }
                         }
@@ -362,7 +404,7 @@ pub const Commit = struct {
         return commit;
     }
 
-    /// Frees memory of the Object
+    /// Frees memory of the `Commit`
     pub fn deinit(self: *Commit, gpa: *Allocator) void {
         gpa.free(self.data);
         gpa.destroy(self);
@@ -370,9 +412,9 @@ pub const Commit = struct {
 };
 
 test "Test decode" {
-    var repo = try Repository.find(std.testing.allocator);
-    defer repo.?.deinit();
+    var repo = (try Repository.find(std.testing.allocator)).?;
+    defer repo.deinit();
 
-    const object = try Object.decode(repo.?, std.testing.allocator, "8bc9a453e049d06ba4eaac24297d371de53c9603");
+    const object = try Object.decode(repo, std.testing.allocator, "8bc9a453e049d06ba4eaac24297d371de53c9603");
     defer object.deinit(std.testing.allocator);
 }

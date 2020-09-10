@@ -25,11 +25,19 @@ pub const hash = Flag{
     .arg = "hash-object",
     .description = "Creates object ID and optionally a blob",
     .help =
-    \\Creates a unique object ID and stores it as an object file, 
-    \\acceptable arguments: -t, -w, path
-    \\-w        Will generate an object ID as well as write it to an object file
+    \\Updates files in the working tree to match the version in the index or the specified tree.
     ,
     .handle = handleHash,
+};
+
+pub const check_out = Flag{
+    .arg = "checkout",
+    .description = "Switch branches or restore working tree files",
+    .help =
+    \\By default shows a list of files which are modified.
+    \\Using -b a branch can be checked out.
+    ,
+    .handle = handleCheckout,
 };
 
 fn handleInit(gpa: *Allocator, args: [][]const u8, writer: anytype) !void {
@@ -66,3 +74,46 @@ fn handleCat(gpa: *Allocator, args: [][]const u8, writer: anytype) !void {
 }
 
 fn handleHash(gpa: *Allocator, args: [][]const u8, writer: anytype) !void {}
+
+/// Checks out a branch if specified. If not, list all branches
+fn handleCheckout(gpa: *Allocator, args: [][]const u8, writer: anytype) !void {
+    const commit: ?[]const u8 = for (args) |arg, i| {
+        if (i != 0 and std.mem.startsWith(u8, arg, "-commit=")) break arg else continue;
+    } else null;
+
+    if (commit == null) return writer.writeAll("Please specify a commit or tree\n");
+
+    const path: ?[]const u8 = for (args) |arg| {
+        if (std.mem.startsWith(u8, arg, "-path=")) break arg else continue;
+    } else null;
+
+    if (path == null) return writer.writeAll("Please specify a path to checkout to\n");
+
+    var repo = (try Repository.find(gpa)) orelse return writer.writeAll("Not a Git repository\n");
+    defer repo.deinit();
+
+    const obj = repo.findObject(gpa, commit.?[8..]) catch |err| return if (err == error.MultipleResults)
+        return writer.writeAll("Multiple objects were found, please specify further\n")
+    else
+        return err;
+
+    if (obj == null) return writer.writeAll("No object file found\n");
+    defer obj.?.deinit(gpa);
+
+    const tree = switch (obj.?.kind) {
+        .commit => blk: {
+            const commit_obj = obj.?.cast(.commit).?;
+            break :blk try commit_obj.getTree(repo, gpa);
+        },
+        .tree => obj.?.cast(.tree).?,
+        .blob => return writer.writeAll("This is not a commit or tree hash\n"),
+    };
+    defer tree.deinit(gpa);
+
+    repo.checkoutTree(tree, path.?[6..]) catch |err| {
+        switch (err) {
+            error.PathAlreadyExists => try writer.writeAll("Path already exists\n"),
+            else => return err,
+        }
+    };
+}

@@ -1,22 +1,25 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const os = std.os;
 const fs = std.fs;
 const testing = std.testing;
-const Object = @import("object.zig").Object;
+
+usingnamespace @import("object.zig");
 
 pub const Repository = struct {
+    /// Working tree of the repository
     working_tree: fs.Dir,
+    /// Directory where all Git objects are stored
     git_dir: fs.Dir,
-    working_path: []const u8 = "",
+    /// Path to the working directory
+    working_path: []const u8,
+
     gpa: *Allocator,
 
     /// Find will try to look for a Git repository from within the current working directory.
     /// It searches recursively through its parents. Will return null if no Repository is found
+    ///
+    /// Deinit() must be called on the `Repository` to free its memory
     pub fn find(gpa: *Allocator) !?Repository {
-        var repo: Repository = undefined;
-        repo.gpa = gpa;
-
         // cwd does not have iterate rights, therefore re-open current working directory with correct rights.
         var dir = try fs.cwd().openDir(".", .{ .iterate = true });
         errdefer dir.close();
@@ -31,10 +34,12 @@ pub const Repository = struct {
             var dir_it = dir.iterate();
             while (try dir_it.next()) |entry| {
                 if (std.mem.eql(u8, entry.name, ".git") and entry.kind == fs.Dir.Entry.Kind.Directory) {
-                    repo.working_tree = dir;
-                    repo.working_path = try gpa.dupe(u8, cwd);
-                    repo.git_dir = try dir.openDir(".git", .{ .iterate = true });
-                    return repo;
+                    return Repository{
+                        .working_tree = dir,
+                        .working_path = try gpa.dupe(u8, cwd),
+                        .git_dir = try dir.openDir(".git", .{}),
+                        .gpa = gpa,
+                    };
                 }
             }
 
@@ -111,6 +116,10 @@ pub const Repository = struct {
 
     /// Resolves the possible hashes based on a name given. The `name` can be part of the hash,
     /// a tag, the HEAD, etc.
+    ///
+    /// Returns a list of possible hashes.
+    ///
+    /// Memory is owned by the caller and each element in the slice should be freed.
     pub fn resolvePart(repo: Repository, name: []const u8) !?[][]const u8 {
         if (name.len < 4) return null;
 
@@ -154,7 +163,9 @@ pub const Repository = struct {
         return list.toOwnedSlice();
     }
 
-    /// Finds an object by its name
+    /// Finds an object by its name, is decoded and then returned to the caller
+    ///
+    /// Memory is owned by the caller and can be freed by calling deinit() on the returned `Object`
     pub fn findObject(repo: Repository, gpa: *Allocator, name: []const u8) !?*Object {
         const results = (try resolvePart(repo, name)) orelse return null;
         defer {
@@ -172,6 +183,30 @@ pub const Repository = struct {
         return try Object.decode(repo, gpa, hash);
     }
 
+    /// Checks out a tree in the given path
+    /// Returns an error if the path already exists
+    pub fn checkoutTree(self: Repository, tree: *const Tree, path: []const u8) anyerror!void {
+        try self.working_tree.makeDir(path);
+
+        for (tree.leafs) |leaf| {
+            const obj = (try self.findObject(self.gpa, leaf.hash)).?;
+            defer obj.deinit(self.gpa);
+
+            const dest = try fs.path.join(self.gpa, &[_][]const u8{ path, leaf.path });
+            defer self.gpa.free(dest);
+
+            if (obj.kind == .tree) {
+                try self.checkoutTree(obj.cast(.tree).?, dest);
+            } else if (obj.kind == .blob) {
+                const file = try self.working_tree.createFile(dest, .{});
+                defer file.close();
+
+                const blob = obj.cast(.blob).?;
+                try file.writer().writeAll(blob.data);
+            }
+        }
+    }
+
     /// Closes the directories so other processes can use them.
     pub fn deinit(self: *Repository) void {
         self.gpa.free(self.working_path);
@@ -183,7 +218,7 @@ pub const Repository = struct {
 const configFile =
     \\[core]
     \\	repositoryformatversion = 0
-    \\	filemode = true
+    \\	filemode = false
     \\	bare = false
     \\	logallrefupdates = true
 ;
