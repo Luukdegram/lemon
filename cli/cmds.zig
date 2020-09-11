@@ -51,6 +51,15 @@ pub const log = Flag{
     .handle = handleLog,
 };
 
+pub const tags = Flag{
+    .arg = "tags",
+    .description = "tags [name]",
+    .help =
+    \\Prints all tags or creates a new one if name is given.
+    ,
+    .handle = handleTag,
+};
+
 fn handleInit(gpa: *Allocator, args: [][]const u8, writer: anytype) !void {
     var path = if (args.len > 1) if (std.mem.eql(u8, args[1], ".")) "" else args[1] else "";
 
@@ -118,6 +127,7 @@ fn handleCheckout(gpa: *Allocator, args: [][]const u8, writer: anytype) !void {
         },
         .tree => obj.?.cast(.tree).?,
         .blob => return writer.writeAll("This is not a commit or tree hash\n"),
+        .tag => return writer.writeAll("TODO, implement for tag\n"),
     };
     defer tree.deinit(gpa);
 
@@ -139,8 +149,25 @@ fn handleLog(gpa: *Allocator, args: [][]const u8, writer: anytype) !void {
     const path = try std.fs.path.join(gpa, &[_][]const u8{ "refs", "heads" });
     defer gpa.free(path);
 
-    const ref = (try refs.findByName(repo, gpa, branch)) orelse return writer.writeAll("Branch does not exist");
+    const ref = (try refs.findByName(repo, gpa, branch)) orelse return writer.writeAll("Branch does not exist\n");
     defer ref.deinit(gpa);
 
     try writer.print("{} {}", .{ ref.name, ref.hash });
+}
+
+/// Shows a list of all tags or creates a new one if a name argument is given
+fn handleTag(gpa: *Allocator, args: [][]const u8, writer: anytype) !void {
+    const name = if (args.len > 1) args[1] else null;
+
+    var repo = (try Repository.find(gpa)) orelse return writer.writeAll("Not a Git repository\n");
+    defer repo.deinit();
+
+    const found_tags = refs.findInPath(repo, gpa, "refs/tags") catch return writer.writeAll("There's currently no tags\n");
+    defer {
+        for (found_tags) |tag| tag.deinit(gpa);
+        gpa.free(found_tags);
+    }
+
+    for (found_tags) |tag|
+        try writer.print("{} {}", .{ tag.name, tag.hash });
 }

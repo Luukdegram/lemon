@@ -19,6 +19,8 @@ const Kind = enum {
     commit,
     /// Contains all leaf objects
     tree,
+    /// Tag object, references a name/version to an object such as a commit
+    tag,
 
     /// Returns the `type` that corresponds to the `Kind`
     pub fn Type(self: Kind) type {
@@ -26,6 +28,7 @@ const Kind = enum {
             .commit => Commit,
             .blob => Blob,
             .tree => Tree,
+            .tag => Tag,
         };
     }
 };
@@ -121,6 +124,13 @@ pub const Object = struct {
 
                 return &tree.base;
             },
+            .tag => {
+                const tag = try gpa.create(Tag);
+                errdefer gpa.destroy(tag);
+                tag.* = Tag.deserialize(allocated_data);
+
+                return &tag.base;
+            },
         };
     }
 
@@ -187,6 +197,10 @@ pub const Object = struct {
                 const tree = self.cast(.tree).?;
                 try writer.print("{}\n", .{tree.leafs[0].hash});
             },
+            .tag => {
+                const tag = self.cast(.tag).?;
+                try writer.print("{}\n", .{tag});
+            },
         }
     }
 
@@ -207,6 +221,7 @@ pub const Object = struct {
             .blob => self.cast(.blob).?.deinit(gpa),
             .commit => self.cast(.commit).?.deinit(gpa),
             .tree => self.cast(.tree).?.deinit(gpa),
+            .tag => self.cast(.tag).?.deinit(gpa),
         }
     }
 };
@@ -236,6 +251,7 @@ pub const Blob = struct {
 /// which contain a mode, path and hash
 pub const Tree = struct {
     base: Object,
+    /// List of `Leaf`
     leafs: []Leaf,
     /// Raw data of `Tree`, used to free all data at once
     data: []const u8,
@@ -344,7 +360,7 @@ pub const Commit = struct {
 
         var state = State.key;
         var commit = Commit{
-            .base = Object{ .kind = .commit },
+            .base = .{ .kind = .commit },
             .tree = undefined,
             .parent = null,
             .author = undefined,
@@ -404,6 +420,88 @@ pub const Commit = struct {
 
     /// Frees memory of the `Commit`
     pub fn deinit(self: *Commit, gpa: *Allocator) void {
+        gpa.free(self.data);
+        gpa.destroy(self);
+    }
+};
+
+/// Tag `Object` which is a reference that points at HEAD or an other `Object`
+pub const Tag = struct {
+    base: Object,
+    /// Author who created the Tag
+    author: []const u8,
+    /// Date when the Tag was created
+    date: []const u8,
+    /// Optional GPG signature of the author
+    gpgsig: ?[]const u8,
+    /// Optional annotation of the Tag
+    annotation: ?[]const u8,
+    /// Contains raw data, used to free all data at once
+    data: []const u8,
+
+    /// Deserializes the raw data into a `Tag` object
+    /// The memory is owned by the caller and can be freed using deinit()
+    pub fn deserialize(buffer: []const u8) Tag {
+        // perhaps we could merge this with Commit's deserialize some way.
+        var tag = Tag{
+            .base = .{ .kind = .tag },
+            .author = undefined,
+            .date = undefined,
+            .gpgsig = null,
+            .annotation = null,
+            .data = buffer,
+        };
+
+        const State = enum { key, value };
+
+        var state = State.key;
+        var last_key: []const u8 = undefined;
+        var last_value: []const u8 = undefined;
+        var prev: u8 = undefined;
+
+        var index: usize = 0;
+        for (buffer) |c, i| {
+            switch (state) {
+                .key => {
+                    if (c == ' ') {
+                        last_key = buffer[index..i];
+                        inline for (@typeInfo(Tag).Struct.fields) |field| {
+                            if (std.mem.eql(u8, field.name, last_key)) {
+                                if (@hasField(Tag, field.name)) {
+                                    index = i + 1;
+                                    state = .value;
+                                }
+                            }
+                        }
+                    }
+                    if (c == '\n') {
+                        index += 1;
+                        break;
+                    }
+                },
+                .value => {
+                    if (prev == '\n' and c != ' ') {
+                        last_value = buffer[index .. i - 1];
+                        index += last_value.len + 1;
+                        state = .key;
+                        inline for (@typeInfo(Tag).Struct.fields) |field| {
+                            if (std.mem.eql(u8, field.name, last_key)) {
+                                if (@TypeOf(@field(tag, field.name)) == ?[]const u8 or
+                                    @TypeOf(@field(tag, field.name)) == []const u8)
+                                    @field(tag, field.name) = last_value;
+                            }
+                        }
+                    }
+                },
+            }
+            prev = c;
+        }
+
+        return tag;
+    }
+
+    /// Frees all data of the Tag.
+    pub fn deinit(self: *Tag, gpa: *Allocator) void {
         gpa.free(self.data);
         gpa.destroy(self);
     }

@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const fs = std.fs;
 const testing = std.testing;
+const ref = @import("ref.zig");
 
 usingnamespace @import("object.zig");
 
@@ -120,40 +121,50 @@ pub const Repository = struct {
     /// Returns a list of possible hashes.
     ///
     /// Memory is owned by the caller and each element in the slice should be freed.
-    pub fn resolvePart(repo: Repository, name: []const u8) !?[][]const u8 {
+    pub fn resolvePart(self: Repository, name: []const u8) !?[][]const u8 {
         if (name.len < 4) return null;
 
-        var list = std.ArrayList([]const u8).init(repo.gpa);
+        var list = std.ArrayList([]const u8).init(self.gpa);
         errdefer {
             for (list.items) |item| {
-                repo.gpa.free(item);
+                self.gpa.free(item);
             }
             list.deinit();
         }
 
         // Resolve by ref
-        if (std.mem.eql(u8, name, "HEAD")) {}
+        if (std.mem.eql(u8, name, "HEAD")) {
+            const refs = try ref.findInPath(self, self.gpa, name);
+            // will only return 1 ref
+            defer {
+                refs[0].deinit(self.gpa);
+                self.gpa.free(refs);
+            }
+
+            try list.append(try self.gpa.dupe(u8, refs[0].name));
+            return list.toOwnedSlice();
+        }
 
         // If hash, return hash itself
         if (name.len == 40) {
-            try list.append(try repo.gpa.dupe(u8, name));
+            try list.append(try self.gpa.dupe(u8, name));
             return list.toOwnedSlice();
         }
 
         // Our return hash, all lowercase
-        var low_case = try std.ascii.allocLowerString(repo.gpa, name);
-        defer repo.gpa.free(low_case);
+        var low_case = try std.ascii.allocLowerString(self.gpa, name);
+        defer self.gpa.free(low_case);
 
         // generate our path to objects folder
         var path: [10]u8 = undefined;
         std.mem.copy(u8, path[0..9], "objects/");
         std.mem.copy(u8, path[8..10], low_case[0..2]);
 
-        var obj_dir = try repo.git_dir.openDir(path[0..], .{ .iterate = true });
+        var obj_dir = try self.git_dir.openDir(path[0..], .{ .iterate = true });
         var it = obj_dir.iterate();
         while (try it.next()) |entry| {
             if (std.mem.startsWith(u8, entry.name, low_case[2..])) {
-                var hash = try repo.gpa.alloc(u8, entry.name.len + 2);
+                var hash = try self.gpa.alloc(u8, entry.name.len + 2);
                 std.mem.copy(u8, hash[0..2], low_case[0..2]);
                 std.mem.copy(u8, hash[2..], entry.name);
                 try list.append(hash);
@@ -166,13 +177,13 @@ pub const Repository = struct {
     /// Finds an object by its name, is decoded and then returned to the caller
     ///
     /// Memory is owned by the caller and can be freed by calling deinit() on the returned `Object`
-    pub fn findObject(repo: Repository, gpa: *Allocator, name: []const u8) !?*Object {
-        const results = (try resolvePart(repo, name)) orelse return null;
+    pub fn findObject(self: Repository, gpa: *Allocator, name: []const u8) !?*Object {
+        const results = (try resolvePart(self, name)) orelse return null;
         defer {
             for (results) |result| {
-                repo.gpa.free(result);
+                self.gpa.free(result);
             }
-            repo.gpa.free(results);
+            self.gpa.free(results);
         }
         if (results.len > 1) return error.MultipleResults;
 
@@ -180,7 +191,7 @@ pub const Repository = struct {
 
         // for now just return object
         // soon we can return a specific commit, tag or tree
-        return try Object.decode(repo, gpa, hash);
+        return try Object.decode(self, gpa, hash);
     }
 
     /// Checks out a tree in the given path
@@ -204,19 +215,6 @@ pub const Repository = struct {
                 const blob = obj.cast(.blob).?;
                 try file.writer().writeAll(blob.data);
             }
-        }
-    }
-
-    /// Returns a `Ref`
-    pub fn refs(self: Repository) !void {
-        var file = try self.git_dir.openFile(path, .{});
-        defer file.close();
-
-        const data = file.reader().readAllAlloc(self.gpa, std.math.maxInt(u64));
-
-        if (std.mem.startsWith(u8, data, "ref: ")) {
-            self.gpa.free(data);
-            return self.ref(path[5..]);
         }
     }
 

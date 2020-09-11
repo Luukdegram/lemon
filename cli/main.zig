@@ -18,6 +18,7 @@ pub fn main() !void {
         .{ "hash-object", cmds_imp.hash },
         .{ "checkout", cmds_imp.check_out },
         .{ "log", cmds_imp.log },
+        .{ "tags", cmds_imp.tags },
     };
 
     const result = parser.parse(gpa) catch |err| return log.err("Error occured parsing arguments: {}\n", .{err});
