@@ -297,21 +297,19 @@ pub const Tree = struct {
         gpa.free(self.data);
         gpa.destroy(self);
     }
-
-    /// Converts a slice to a Hex string
-    fn bytesToHex(out: []u8, input: []const u8) !void {
-        if (out.len / 2 != input.len) return error.InvalidSize;
-
-        const hextable = "0123456789abcdef";
-
-        var i: usize = 0;
-        for (input) |c| {
-            out[i] = hextable[c >> 4];
-            out[i + 1] = hextable[c & 0x0F];
-            i += 2;
-        }
-    }
 };
+
+/// Converts a slice to a Hex string
+fn bytesToHex(out: []u8, input: []const u8) !void {
+    if (out.len / 2 != input.len) return error.InvalidSize;
+
+    const hextable = "0123456789abcdef";
+
+    for (input) |c, i| {
+        out[i * 2] = hextable[c >> 4];
+        out[i * 2 + 1] = hextable[c & 0x0F];
+    }
+}
 
 /// Commit `Object` with its optional data
 /// Note that all fields are named after their represental

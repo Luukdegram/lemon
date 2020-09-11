@@ -185,7 +185,7 @@ pub const Repository = struct {
 
     /// Checks out a tree in the given path
     /// Returns an error if the path already exists
-    pub fn checkoutTree(self: Repository, tree: *const Tree, path: []const u8) anyerror!void {
+    pub fn checkout(self: Repository, tree: *const Tree, path: []const u8) anyerror!void {
         try self.working_tree.makeDir(path);
 
         for (tree.leafs) |leaf| {
@@ -196,7 +196,7 @@ pub const Repository = struct {
             defer self.gpa.free(dest);
 
             if (obj.kind == .tree) {
-                try self.checkoutTree(obj.cast(.tree).?, dest);
+                try self.checkout(obj.cast(.tree).?, dest);
             } else if (obj.kind == .blob) {
                 const file = try self.working_tree.createFile(dest, .{});
                 defer file.close();
@@ -204,6 +204,19 @@ pub const Repository = struct {
                 const blob = obj.cast(.blob).?;
                 try file.writer().writeAll(blob.data);
             }
+        }
+    }
+
+    /// Returns a `Ref`
+    pub fn refs(self: Repository) !void {
+        var file = try self.git_dir.openFile(path, .{});
+        defer file.close();
+
+        const data = file.reader().readAllAlloc(self.gpa, std.math.maxInt(u64));
+
+        if (std.mem.startsWith(u8, data, "ref: ")) {
+            self.gpa.free(data);
+            return self.ref(path[5..]);
         }
     }
 

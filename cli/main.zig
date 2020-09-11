@@ -1,5 +1,4 @@
 const std = @import("std");
-const lemon = @import("lemon");
 const parser = @import("parser.zig");
 
 usingnamespace @import("flag.zig");
@@ -18,6 +17,7 @@ pub fn main() !void {
         .{ "cat-file", cmds_imp.cat },
         .{ "hash-object", cmds_imp.hash },
         .{ "checkout", cmds_imp.check_out },
+        .{ "log", cmds_imp.log },
     };
 
     const result = parser.parse(gpa) catch |err| return log.err("Error occured parsing arguments: {}\n", .{err});

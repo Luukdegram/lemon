@@ -3,6 +3,7 @@ const Allocator = std.mem.Allocator;
 
 usingnamespace @import("flag.zig");
 usingnamespace @import("lemon");
+const lemon = @import("lemon");
 
 pub const init = Flag{
     .arg = "init",
@@ -38,6 +39,16 @@ pub const check_out = Flag{
     \\Using -b a branch can be checked out.
     ,
     .handle = handleCheckout,
+};
+
+pub const log = Flag{
+    .arg = "log",
+    .description = "Prints the log of the given branch",
+    .help =
+    \\Prints a list of the object + message of each commit,
+    \\belonging to the given branch as argument
+    ,
+    .handle = handleLog,
 };
 
 fn handleInit(gpa: *Allocator, args: [][]const u8, writer: anytype) !void {
@@ -110,10 +121,26 @@ fn handleCheckout(gpa: *Allocator, args: [][]const u8, writer: anytype) !void {
     };
     defer tree.deinit(gpa);
 
-    repo.checkoutTree(tree, path.?[6..]) catch |err| {
+    repo.checkout(tree, path.?[6..]) catch |err| {
         switch (err) {
             error.PathAlreadyExists => try writer.writeAll("Path already exists\n"),
             else => return err,
         }
     };
+}
+
+/// Returns the log of the given branch
+fn handleLog(gpa: *Allocator, args: [][]const u8, writer: anytype) !void {
+    const branch = if (args.len > 1) args[1] else return writer.writeAll("Missing branch name\n");
+
+    var repo = (try Repository.find(gpa)) orelse return writer.writeAll("Not a Git repository\n");
+    defer repo.deinit();
+
+    const path = try std.fs.path.join(gpa, &[_][]const u8{ "refs", "heads" });
+    defer gpa.free(path);
+
+    const ref = (try refs.findByName(repo, gpa, branch)) orelse return writer.writeAll("Branch does not exist");
+    defer ref.deinit(gpa);
+
+    try writer.print("{} {}", .{ ref.name, ref.hash });
 }
