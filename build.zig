@@ -12,7 +12,7 @@ pub fn build(b: *Builder) void {
     test_step.dependOn(&main_tests.step);
 
     const cli = b.addExecutable("lemon", "cli/main.zig");
-    cli.addPackage(.{ .name = "lemon", .path = "src/lemon.zig" });
+    cli.addPackage(.{ .name = "lemon", .path = .{ .path = "src/lemon.zig" } });
     cli.setTarget(target);
     cli.setBuildMode(mode);
     cli.install();
