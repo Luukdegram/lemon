@@ -1,4 +1,6 @@
 const std = @import("std");
+const deps = @import("./deps.zig");
+
 const Builder = std.build.Builder;
 
 pub fn build(b: *Builder) void {
@@ -12,8 +14,9 @@ pub fn build(b: *Builder) void {
     test_step.dependOn(&main_tests.step);
 
     const cli = b.addExecutable("lemon", "cli/main.zig");
-    cli.addPackage(.{ .name = "lemon", .path = .{ .path = "src/lemon.zig" } });
+    //cli.addPackage(.{ .name = "lemon", .path = .{ .path = "src/lemon.zig" } });
     cli.setTarget(target);
     cli.setBuildMode(mode);
+    deps.addAllTo(cli);
     cli.install();
 }
