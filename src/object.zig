@@ -191,15 +191,15 @@ pub const Object = struct {
             },
             .commit => {
                 const commit = self.cast(.commit).?;
-                try writer.print("{}\n", .{commit.message});
+                try writer.print("{s}\n", .{commit.message});
             },
             .tree => {
                 const tree = self.cast(.tree).?;
-                try writer.print("{}\n", .{tree.leafs[0].hash});
+                try writer.print("{s}\n", .{tree.leafs[0].hash});
             },
             .tag => {
                 const tag = self.cast(.tag).?;
-                try writer.print("{}\n", .{tag});
+                try writer.print("{s}\n", .{tag});
             },
         }
     }
