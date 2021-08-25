@@ -93,7 +93,11 @@ fn handleCat(gpa: *Allocator, args: [][]const u8, writer: anytype) !void {
         try writer.writeAll("No object file found\n");
 }
 
-fn handleHash(gpa: *Allocator, args: [][]const u8, writer: anytype) !void {}
+fn handleHash(gpa: *Allocator, args: [][]const u8, writer: anytype) !void {
+    _ = gpa;
+    _ = args;
+    _ = writer;
+}
 
 /// Checks out a branch if specified. If not, list all branches
 fn handleCheckout(gpa: *Allocator, args: [][]const u8, writer: anytype) !void {
@@ -157,7 +161,7 @@ fn handleLog(gpa: *Allocator, args: [][]const u8, writer: anytype) !void {
 
 /// Shows a list of all tags or creates a new one if a name argument is given
 fn handleTag(gpa: *Allocator, args: [][]const u8, writer: anytype) !void {
-    const name = if (args.len > 1) args[1] else null;
+    _ = if (args.len > 1) args[1] else null;
 
     var repo = (try Repository.find(gpa)) orelse return writer.writeAll("Not a Git repository\n");
     defer repo.deinit();
