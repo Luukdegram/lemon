@@ -65,18 +65,18 @@ fn handleInit(gpa: *Allocator, args: [][]const u8, writer: anytype) !void {
 
     if (Repository.create(gpa, path)) |*repo| {
         defer repo.deinit();
-        try writer.print("Initialized empty Git Repository in {}/.git\n", .{repo.working_path});
+        try writer.print("Initialized empty Git Repository in {s}/.git\n", .{repo.working_path});
     } else |err| {
         const msg = switch (err) {
             error.PathAlreadyExists => "Git repository already exists",
             else => err,
         };
-        try writer.print("Could not initialize Git repository: {}\n", .{msg});
+        try writer.print("Could not initialize Git repository: {s}\n", .{msg});
     }
 }
 
 fn handleCat(gpa: *Allocator, args: [][]const u8, writer: anytype) !void {
-    var name = if (args.len > 1) args[1] else return writer.print("Expected object hash: {}\n", .{cat.help});
+    var name = if (args.len > 1) args[1] else return writer.print("Expected object hash: {s}\n", .{cat.help});
 
     var repo = (try Repository.find(gpa)) orelse return writer.writeAll("Not a Git repository\n");
     defer repo.deinit();
@@ -156,7 +156,7 @@ fn handleLog(gpa: *Allocator, args: [][]const u8, writer: anytype) !void {
     const ref = (try refs.findByName(repo, gpa, branch)) orelse return writer.writeAll("Branch does not exist\n");
     defer ref.deinit(gpa);
 
-    try writer.print("{} {}", .{ ref.name, ref.hash });
+    try writer.print("{s} {s}", .{ ref.name, ref.hash });
 }
 
 /// Shows a list of all tags or creates a new one if a name argument is given
@@ -173,5 +173,5 @@ fn handleTag(gpa: *Allocator, args: [][]const u8, writer: anytype) !void {
     }
 
     for (found_tags) |tag|
-        try writer.print("{} {}", .{ tag.name, tag.hash });
+        try writer.print("{s} {s}", .{ tag.name, tag.hash });
 }

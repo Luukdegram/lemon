@@ -31,5 +31,5 @@ pub fn main() !void {
         }
     }
 
-    log.err("Unknown command: {}\n", .{result.args[0]});
+    log.err("Unknown command: {s}\n", .{result.args[0]});
 }
