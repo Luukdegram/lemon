@@ -141,7 +141,7 @@ pub const Object = struct {
     /// Compresses the Object, its data and writes it to an object file
     /// This will return the hash
     pub fn encode(self: Object, gpa: *Allocator, data: []u8) WriteError![20]u8 {
-        @compileError("TODO implement when zlib compression is supported");
+        std.debug.panic("//TODO: implement zlib compression when supported", .{});
         const kind = kindToString(self.kind);
         const sizeString = std.mem.toBytes(data.len);
         const content = &[_][]u8{
