@@ -3,6 +3,10 @@ const fs = std.fs;
 const Allocator = std.mem.Allocator;
 const Repository = @import("repository.zig").Repository;
 
+const C = @cImport({
+    @cInclude("zlib.h");
+});
+
 /// Errors that can be thrown while decoding an object file
 const ReadError = error{
     /// Object file contains an incorrect type
