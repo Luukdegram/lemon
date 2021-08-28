@@ -161,8 +161,11 @@ fn handleLog(gpa: *Allocator, args: [][]const u8, writer: anytype) !void {
 
 /// Shows a list of all tags or creates a new one if a name argument is given
 fn handleTag(gpa: *Allocator, args: [][]const u8, writer: anytype) !void {
-    std.debug.panic("//TODO: Implement tag creation", .{});
-    _ = args;
+    const name = if (args.len > 1) args[1] else null;
+    if(name != null) {
+        std.debug.panic("//TODO: Implement tag creation", .{});
+    }
+   
 
     var repo = (try Repository.find(gpa)) orelse return writer.writeAll("Not a Git repository\n");
     defer repo.deinit();
